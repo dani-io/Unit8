@@ -1,0 +1,29 @@
+{
+    "name": "ichimoku_123_reversal",
+    "description": "Trendline break + 1-2-3 pattern confirmed by Ichimoku and hidden divergence",
+    "timeframe": "M15",
+    "entry_timeframe": "M1",
+    "symbols": [
+        "EURUSD", "GBPUSD", "USDJPY", "AUDUSD",
+        "EURJPY", "GBPJPY", "USDCAD", "EURGBP"
+    ],
+    "checks": [
+        {"tool": "swing_detector", "required": true, "config": {"window": 5}},
+        {"tool": "trendline_break", "required": true, "config": {"min_touches": 2}},
+        {"tool": "pattern_123", "required": true, "config": {}},
+        {"tool": "ichimoku", "required": true, "config": {}},
+        {"tool": "divergence", "required": false, "config": {"source": "kijun"}},
+        {"tool": "support_resistance", "required": false, "config": {}},
+        {"tool": "spread_filter", "required": true, "config": {"max_spread_points": 20}}
+    ],
+    "risk": {
+        "risk_per_trade": 1.0,
+        "daily_loss_limit": 2.0,
+        "daily_profit_limit": 5.0
+    },
+    "schedule": {
+        "interval_seconds": 30,
+        "trading_hours": [8, 20],
+        "allowed_weekdays": [0, 1, 2, 3, 4]
+    }
+}

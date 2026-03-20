@@ -1,0 +1,15 @@
+.env
+config.json
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+*.log
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
