@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from broker.mock_broker import MockBroker
 from broker.mt5_broker import MT5Broker
 from broker.ctrader_broker import CTraderBroker
+from broker.bridge_broker import BridgeBroker
 from core.checklist import Checklist
 from core.risk import RiskManager
 from core.execution import ExecutionEngine
@@ -49,7 +50,7 @@ def build_broker(config: dict):
     """
     Create the broker specified in config["broker"]["type"].
 
-    Supported types: "mock", "mt5", "ctrader".
+    Supported types: "mock", "mt5", "ctrader", "bridge".
     The whole broker section is passed to the broker's constructor,
     so broker-specific keys (data_dir, account, ...) live there too.
     """
@@ -60,6 +61,7 @@ def build_broker(config: dict):
         "mock": MockBroker,
         "mt5": MT5Broker,
         "ctrader": CTraderBroker,
+        "bridge": BridgeBroker,
     }
 
     cls = broker_map.get(broker_type)

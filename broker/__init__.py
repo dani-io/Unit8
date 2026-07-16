@@ -2,3 +2,4 @@ from .base_broker import BaseBroker, Tick, AccountInfo, SymbolInfo, Position
 from .mt5_broker import MT5Broker
 from .mock_broker import MockBroker
 from .ctrader_broker import CTraderBroker
+from .bridge_broker import BridgeBroker
