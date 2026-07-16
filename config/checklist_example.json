@@ -3,6 +3,14 @@
     "description": "Trendline break + 1-2-3 pattern confirmed by Ichimoku and hidden divergence",
     "timeframe": "M15",
     "entry_timeframe": "M1",
+    "broker": {
+        "type": "mock",
+        "data_dir": "data/",
+        "balance": 10000,
+        "symbols": {
+            "EURUSD": {"point": 0.00001, "spread": 0.00015}
+        }
+    },
     "symbols": [
         "EURUSD", "GBPUSD", "USDJPY", "AUDUSD",
         "EURJPY", "GBPJPY", "USDCAD", "EURGBP"

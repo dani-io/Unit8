@@ -25,8 +25,9 @@ class DivergenceDetector(BaseTool):
         self.source = self.config.get("source", "kijun")
         self.lookback = self.config.get("lookback", 50)
     
-    def check(self, df: pd.DataFrame, symbol: str = "", swings: list = None) -> ToolResult:
+    def check(self, df: pd.DataFrame, symbol: str = "", context: dict = None) -> ToolResult:
         """Detect divergence between price and indicator."""
+        swings = context.get("swing_detector", {}).get("swings", []) if context else []
         # TODO: Implement
         # 1. Get price swings
         # 2. Get indicator swings (Kijun or MACD)

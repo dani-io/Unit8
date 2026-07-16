@@ -24,8 +24,9 @@ class SupportResistance(BaseTool):
         self.zone_threshold = self.config.get("zone_threshold", 0.001)
         self.min_touches = self.config.get("min_touches", 2)
     
-    def check(self, df: pd.DataFrame, symbol: str = "", swings: list = None) -> ToolResult:
+    def check(self, df: pd.DataFrame, symbol: str = "", context: dict = None) -> ToolResult:
         """Find S/R levels from swing points."""
+        swings = context.get("swing_detector", {}).get("swings", []) if context else []
         # TODO: Implement
         # 1. Cluster swing prices that are close together
         # 2. Count touches per zone

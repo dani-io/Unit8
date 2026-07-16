@@ -32,14 +32,15 @@ class Pattern123(BaseTool):
         self.min_retracement = self.config.get("min_retracement", 0.3)
         self.max_retracement = self.config.get("max_retracement", 0.9)
     
-    def check(self, df: pd.DataFrame, symbol: str = "", swings: list = None) -> ToolResult:
+    def check(self, df: pd.DataFrame, symbol: str = "", context: dict = None) -> ToolResult:
         """
         Detect 1-2-3 pattern from swing points.
-        
+
         Args:
             df: OHLCV data
-            swings: List of swing points from SwingDetector
+            context: Shared tool results — reads swings from swing_detector
         """
+        swings = context.get("swing_detector", {}).get("swings", []) if context else []
         if not swings or len(swings) < 3:
             return self._fail("Need at least 3 swing points")
         

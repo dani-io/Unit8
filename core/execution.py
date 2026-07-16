@@ -6,9 +6,9 @@ Also monitors open positions for risk-free opportunities.
 """
 
 import logging
-from unit8.broker.base_broker import BaseBroker
-from unit8.core.risk import RiskManager
-from unit8.core.checklist import ChecklistResult
+from broker.base_broker import BaseBroker
+from core.risk import RiskManager
+from core.checklist import ChecklistResult
 
 logger = logging.getLogger("unit8.execution")
 

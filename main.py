@@ -10,16 +10,22 @@ This is how everything connects:
 """
 
 import json
+import sys
 import time
 import logging
 import os
 from datetime import datetime
 
-from unit8.broker.mt5_broker import MT5Broker
-from unit8.core.checklist import Checklist
-from unit8.core.risk import RiskManager
-from unit8.core.execution import ExecutionEngine
-from unit8.tools import (
+# Make imports work regardless of where main.py is run from
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from broker.mock_broker import MockBroker
+from broker.mt5_broker import MT5Broker
+from broker.ctrader_broker import CTraderBroker
+from core.checklist import Checklist
+from core.risk import RiskManager
+from core.execution import ExecutionEngine
+from tools import (
     SwingDetector, Ichimoku, Pattern123,
     TrendlineBreak, DivergenceDetector,
     SupportResistance, SpreadFilter,
@@ -37,6 +43,34 @@ def load_checklist_config(path: str = "config/checklist_example.json") -> dict:
     """Load strategy checklist from JSON."""
     with open(path, "r") as f:
         return json.load(f)
+
+
+def build_broker(config: dict):
+    """
+    Create the broker specified in config["broker"]["type"].
+
+    Supported types: "mock", "mt5", "ctrader".
+    The whole broker section is passed to the broker's constructor,
+    so broker-specific keys (data_dir, account, ...) live there too.
+    """
+    broker_cfg = config.get("broker", {})
+    broker_type = broker_cfg.get("type", "mock").lower()
+
+    broker_map = {
+        "mock": MockBroker,
+        "mt5": MT5Broker,
+        "ctrader": CTraderBroker,
+    }
+
+    cls = broker_map.get(broker_type)
+    if cls is None:
+        raise ValueError(
+            f"Unknown broker type: '{broker_type}'. "
+            f"Supported: {list(broker_map.keys())}"
+        )
+
+    logger.info(f"Using broker: {broker_type}")
+    return cls(broker_cfg)
 
 
 def build_tools(checks: list) -> dict:
@@ -82,12 +116,13 @@ def is_trading_time(schedule: dict) -> bool:
 
 
 def main():
-    # --- 1. Load config ---
-    config = load_checklist_config()
+    # --- 1. Load config (optional path as first CLI arg) ---
+    config_path = sys.argv[1] if len(sys.argv) > 1 else "config/checklist_example.json"
+    config = load_checklist_config(config_path)
     logger.info(f"Loaded strategy: {config['name']}")
-    
+
     # --- 2. Connect broker ---
-    broker = MT5Broker()
+    broker = build_broker(config)
     if not broker.connect():
         logger.error("Failed to connect to broker")
         return
@@ -134,9 +169,20 @@ def main():
                     df = broker.get_ohlcv(symbol, timeframe)
                     if df is None or df.empty:
                         continue
-                    
+
+                    # Inject live tick data into context (needed by spread_filter)
+                    context = {}
+                    tick = broker.get_tick(symbol)
+                    sym_info = broker.get_symbol_info(symbol)
+                    if tick and sym_info:
+                        context["tick"] = {
+                            "bid": tick.bid,
+                            "ask": tick.ask,
+                            "point": sym_info.point,
+                        }
+
                     # Evaluate checklist
-                    decision = checklist.evaluate(df, symbol)
+                    decision = checklist.evaluate(df, symbol, initial_context=context)
                     
                     if decision.go:
                         logger.info(f"\n{decision.summary()}")

@@ -32,8 +32,8 @@ class Ichimoku(BaseTool):
         self.span_b_period = self.config.get("span_b_period", 52)
         self.shift = self.config.get("shift", 26)
     
-    def check(self, df: pd.DataFrame, symbol: str = "") -> ToolResult:
-        """Analyze current Ichimoku state."""
+    def check(self, df: pd.DataFrame, symbol: str = "", context: dict = None) -> ToolResult:
+        """Analyze current Ichimoku state. (context accepted but not required.)"""
         df = self.calculate(df)
         
         # TODO: Implement signal logic based on checklist needs

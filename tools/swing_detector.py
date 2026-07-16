@@ -28,8 +28,8 @@ class SwingDetector(BaseTool):
         self.window = self.config.get("window", 5)
         self.min_distance = self.config.get("min_distance", 5)
     
-    def check(self, df: pd.DataFrame, symbol: str = "") -> ToolResult:
-        """Find all swing points in the data."""
+    def check(self, df: pd.DataFrame, symbol: str = "", context: dict = None) -> ToolResult:
+        """Find all swing points in the data. (context unused — this tool is the source.)"""
         swings = self.find_swings(df)
         
         if len(swings) < 2:

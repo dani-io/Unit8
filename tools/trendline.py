@@ -22,8 +22,9 @@ class TrendlineBreak(BaseTool):
         super().__init__(config)
         self.min_touches = self.config.get("min_touches", 2)
     
-    def check(self, df: pd.DataFrame, symbol: str = "", swings: list = None) -> ToolResult:
+    def check(self, df: pd.DataFrame, symbol: str = "", context: dict = None) -> ToolResult:
         """Detect if a trendline has been broken."""
+        swings = context.get("swing_detector", {}).get("swings", []) if context else []
         # TODO: Implement
         # 1. Build trendline from swing lows (uptrend) or swing highs (downtrend)
         # 2. Check if current price has broken through

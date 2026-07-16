@@ -24,6 +24,18 @@ class SpreadFilter(BaseTool):
         self.max_spread = self.config.get("max_spread_points", 20)
         self.overrides = self.config.get("overrides", {})
     
+    def check(self, df, symbol: str = "", context: dict = None) -> ToolResult:
+        """
+        Checklist entry point. Uses live tick data from context if available
+        (context["tick"] = {"bid": ..., "ask": ..., "point": ...}),
+        otherwise fails gracefully — spread can't be derived from OHLCV alone.
+        """
+        tick = (context or {}).get("tick", {})
+        bid, ask, point = tick.get("bid"), tick.get("ask"), tick.get("point")
+        if bid is None or ask is None or point is None:
+            return self._fail("No tick data in context (need bid/ask/point)")
+        return self.check_spread(symbol, bid, ask, point)
+
     def check_spread(self, symbol: str, bid: float, ask: float, point: float) -> ToolResult:
         """
         Check if spread is acceptable.

@@ -39,14 +39,17 @@ class BaseTool:
     def __init__(self, config: dict = None):
         self.config = config or {}
     
-    def check(self, df: pd.DataFrame, symbol: str = "") -> ToolResult:
+    def check(self, df: pd.DataFrame, symbol: str = "", context: dict = None) -> ToolResult:
         """
         Run the tool's analysis on the given data.
-        
+
         Args:
             df: OHLCV DataFrame with columns: open, high, low, close, volume, time
             symbol: Trading symbol (e.g., "EURUSD")
-        
+            context: Shared dict of previous tool results, keyed by tool name.
+                     Filled by the checklist as it runs — lets tools build on
+                     each other (e.g., pattern_123 reads swing_detector's swings).
+
         Returns:
             ToolResult with pass/fail and relevant data
         """

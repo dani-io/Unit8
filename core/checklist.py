@@ -25,7 +25,7 @@ If required=false and tool fails → trade still possible, just noted.
 
 import logging
 from typing import Dict, List
-from unit8.tools.base_tool import BaseTool, ToolResult
+from tools.base_tool import BaseTool, ToolResult
 
 logger = logging.getLogger("unit8.checklist")
 
@@ -51,33 +51,39 @@ class Checklist:
         self.checks = config.get("checks", [])
         self.tools = tools
     
-    def evaluate(self, df, symbol: str) -> "ChecklistResult":
+    def evaluate(self, df, symbol: str, initial_context: dict = None) -> "ChecklistResult":
         """
         Run all checks and return a decision.
-        
+
         Args:
             df: OHLCV DataFrame
             symbol: Trading symbol
-        
+            initial_context: Optional pre-populated context (e.g., live tick
+                data under "tick" for spread_filter). Tool results are
+                accumulated on top of it.
+
         Returns:
             ChecklistResult with go/no-go and all tool results
         """
         results: List[ToolResult] = []
         all_required_passed = True
         signal = "none"
-        
+        # Shared tool results — lets later tools use earlier output
+        context = dict(initial_context) if initial_context else {}
+
         for check in self.checks:
             tool_name = check["tool"]
             required = check.get("required", True)
-            
+
             tool = self.tools.get(tool_name)
             if tool is None:
                 logger.warning(f"Tool '{tool_name}' not found, skipping")
                 if required:
                     all_required_passed = False
                 continue
-            
-            result = tool.check(df, symbol)
+
+            result = tool.check(df, symbol, context=context)
+            context[tool_name] = result.data
             results.append(result)
             
             if result.passed and result.signal != "none":
