@@ -40,6 +40,11 @@ TIMEFRAMES = {
 
 MAGIC_NUMBER = 143263
 
+# symbol_info.filling_mode is a bitmask of the fill types the broker allows.
+# Not exposed as constants by the MetaTrader5 package, so define them here.
+SYMBOL_FILLING_FOK = 1
+SYMBOL_FILLING_IOC = 2
+
 
 # ─── MT5 connection ──────────────────────────────────────────
 
@@ -71,6 +76,26 @@ def require_mt5():
     """Raise 503 if MT5 is not connected (tries to reconnect once)."""
     if not mt5_connected() and not mt5_connect():
         raise HTTPException(status_code=503, detail="MT5 not connected")
+
+
+def detect_filling_mode(symbol: str) -> int:
+    """
+    Pick a fill type the broker actually accepts for this symbol.
+
+    Brokers differ in which fill types they allow — sending an unsupported one
+    gets the order rejected with retcode 10030 (invalid fill). symbol_info
+    reports the allowed types as a bitmask, so read it instead of guessing.
+    """
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        raise HTTPException(status_code=404, detail=f"Unknown symbol: {symbol}")
+
+    modes = info.filling_mode
+    if modes & SYMBOL_FILLING_FOK:
+        return mt5.ORDER_FILLING_FOK
+    if modes & SYMBOL_FILLING_IOC:
+        return mt5.ORDER_FILLING_IOC
+    return mt5.ORDER_FILLING_RETURN
 
 
 @asynccontextmanager
@@ -226,6 +251,7 @@ def place_order(req: OrderRequest):
 
     order_type = mt5.ORDER_TYPE_BUY if req.side == "buy" else mt5.ORDER_TYPE_SELL
     price = t.ask if req.side == "buy" else t.bid
+    filling = detect_filling_mode(req.symbol)
 
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -237,7 +263,7 @@ def place_order(req: OrderRequest):
         "magic": MAGIC_NUMBER,
         "comment": "Unit8",
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_filling": filling,
     }
     if req.sl is not None:
         request["sl"] = req.sl
@@ -251,7 +277,7 @@ def place_order(req: OrderRequest):
             detail += f" (retcode {result.retcode})"
         raise HTTPException(status_code=422, detail=detail)
 
-    logger.info(f"Order placed: {req.symbol} {req.side} {req.volume} @ {price}")
+    logger.info(f"Order placed: {req.symbol} {req.side} {req.volume} @ {price} (fill={filling})")
     return {"ticket": result.order, "price": price}
 
 
@@ -270,6 +296,7 @@ def close_position(req: CloseRequest):
     # Close = opposite-side deal referencing the position
     order_type = mt5.ORDER_TYPE_SELL if pos.type == 0 else mt5.ORDER_TYPE_BUY
     price = t.bid if pos.type == 0 else t.ask
+    filling = detect_filling_mode(pos.symbol)
 
     request = {
         "action": mt5.TRADE_ACTION_DEAL,
@@ -282,7 +309,7 @@ def close_position(req: CloseRequest):
         "magic": MAGIC_NUMBER,
         "comment": "Unit8 close",
         "type_time": mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_filling": filling,
     }
 
     result = mt5.order_send(request)
