@@ -5,16 +5,29 @@ The bridge (bridge/server.py) runs on a Windows VM next to MT5 and
 exposes REST endpoints. This broker lets Unit8 on Linux trade through
 MT5 without importing the MetaTrader5 package.
 
+The bridge is published through a Cloudflare Tunnel guarded by Cloudflare
+Access (see bridge/CLOUDFLARE.md), so every request carries:
+    Authorization: Bearer <BRIDGE_TOKEN>        — checked by the bridge
+    CF-Access-Client-Id / CF-Access-Client-Secret — checked by Cloudflare
+                                                    (only when configured)
+
 Config:
-    {"url": "http://192.168.56.101:8000", "timeout": 10}
+    {
+        "url": "https://bridge.example.com",
+        "token": "...",
+        "cf_access_client_id": "....access",
+        "cf_access_client_secret": "...",
+        "timeout": 10
+    }
 
 Or from environment:
-    BRIDGE_URL=http://192.168.56.101:8000
+    BRIDGE_URL, BRIDGE_TOKEN, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET
 """
 
 import os
 import logging
-from typing import List, Optional
+from typing import Any, List, Optional
+from urllib.parse import urlparse
 
 import pandas as pd
 import requests
@@ -24,12 +37,31 @@ from .base_broker import BaseBroker, Tick, AccountInfo, SymbolInfo, Position
 logger = logging.getLogger("unit8.broker.bridge")
 
 
+def _is_cf_access_rejection(resp: requests.Response) -> bool:
+    """
+    True if Cloudflare Access answered instead of the bridge.
+
+    Access either redirects to its login page (…cloudflareaccess.com or
+    /cdn-cgi/access/login) or serves an HTML block page — never JSON.
+    """
+    if resp.is_redirect:
+        location = resp.headers.get("location", "")
+        host = urlparse(location).hostname or ""
+        return host.endswith("cloudflareaccess.com") or "/cdn-cgi/access/" in location
+
+    content_type = resp.headers.get("content-type", "")
+    if "application/json" in content_type:
+        return False
+    body = resp.text[:4000].lower()
+    return "cloudflare access" in body or "cloudflareaccess.com" in body or "cdn-cgi/access" in body
+
+
 class BridgeBroker(BaseBroker):
     """
     MT5 via the REST bridge.
 
     Usage:
-        broker = BridgeBroker({"url": "http://192.168.56.101:8000"})
+        broker = BridgeBroker({"url": "https://bridge.example.com", "token": "..."})
         broker.connect()
         df = broker.get_ohlcv("EURUSD", "M15")
     """
@@ -38,31 +70,63 @@ class BridgeBroker(BaseBroker):
         config = config or {}
         self.url = (config.get("url") or os.getenv("BRIDGE_URL", "http://localhost:8000")).rstrip("/")
         self.timeout = config.get("timeout", 10)
+
+        token = config.get("token") or os.getenv("BRIDGE_TOKEN", "")
+        cf_id = config.get("cf_access_client_id") or os.getenv("CF_ACCESS_CLIENT_ID", "")
+        cf_secret = config.get("cf_access_client_secret") or os.getenv("CF_ACCESS_CLIENT_SECRET", "")
+
+        # Session headers ride along on every request. TLS verification stays
+        # on (requests' default) — Cloudflare serves a valid certificate.
         self._session = requests.Session()
+        if token:
+            self._session.headers["Authorization"] = f"Bearer {token}"
+        else:
+            logger.warning("BRIDGE_TOKEN not set — the bridge will reject every request")
+
+        if cf_id and cf_secret:
+            self._session.headers["CF-Access-Client-Id"] = cf_id
+            self._session.headers["CF-Access-Client-Secret"] = cf_secret
+        elif cf_id or cf_secret:
+            logger.warning("Only one of CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET is set — not sending either")
 
     # ─── HTTP helpers ─────────────────────────────────────────
 
-    def _get(self, path: str, params: dict = None) -> Optional[dict]:
+    def _request(self, method: str, path: str, **kwargs) -> Optional[Any]:
         try:
-            resp = self._session.get(f"{self.url}{path}", params=params, timeout=self.timeout)
-            if resp.status_code != 200:
-                logger.warning(f"GET {path} → {resp.status_code}: {resp.text[:200]}")
-                return None
-            return resp.json()
+            # No redirects: the bridge never redirects, so one means
+            # Cloudflare Access is bouncing us to its login page.
+            resp = self._session.request(
+                method, f"{self.url}{path}",
+                timeout=self.timeout, allow_redirects=False, **kwargs,
+            )
         except requests.RequestException as e:
-            logger.error(f"GET {path} failed: {e}")
+            logger.error(f"{method} {path} failed: {e}")
             return None
 
-    def _post(self, path: str, body: dict) -> Optional[dict]:
-        try:
-            resp = self._session.post(f"{self.url}{path}", json=body, timeout=self.timeout)
-            if resp.status_code != 200:
-                logger.warning(f"POST {path} → {resp.status_code}: {resp.text[:200]}")
-                return None
-            return resp.json()
-        except requests.RequestException as e:
-            logger.error(f"POST {path} failed: {e}")
+        if _is_cf_access_rejection(resp):
+            logger.error(
+                f"Cloudflare Access rejected the request: {method} {path} → {resp.status_code}. "
+                "Check CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET and the Access Service Auth policy."
+            )
             return None
+        if resp.status_code == 401:
+            logger.error(f"Bridge rejected the token: {method} {path} → 401. Check BRIDGE_TOKEN.")
+            return None
+        if resp.status_code != 200:
+            logger.warning(f"{method} {path} → {resp.status_code}: {resp.text[:200]}")
+            return None
+
+        try:
+            return resp.json()
+        except ValueError:
+            logger.error(f"{method} {path} returned non-JSON: {resp.text[:200]}")
+            return None
+
+    def _get(self, path: str, params: dict = None) -> Optional[Any]:
+        return self._request("GET", path, params=params)
+
+    def _post(self, path: str, body: dict) -> Optional[Any]:
+        return self._request("POST", path, json=body)
 
     # ─── BaseBroker interface ─────────────────────────────────
 

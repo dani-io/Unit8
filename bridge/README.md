@@ -2,7 +2,8 @@
 
 Thin REST wrapper around the MetaTrader5 Python package.
 Runs on a **Windows VM** next to the MT5 terminal, so Unit8 on Linux
-can trade through MT5 over plain HTTP.
+can trade through MT5 over HTTPS — published via a Cloudflare Tunnel
+behind Cloudflare Access (see [CLOUDFLARE.md](CLOUDFLARE.md)).
 
 No business logic lives here — prices and volumes pass through as-is.
 
@@ -21,18 +22,32 @@ No business logic lives here — prices and volumes pass through as-is.
    MT5_ACCOUNT=12345678
    MT5_PASSWORD=your_password
    MT5_SERVER=YourBroker-ECN
+   BRIDGE_TOKEN=<32+ char random token>
    ```
 
-4. Run the bridge:
+   Generate the token with:
 
    ```
-   uvicorn server:app --host 0.0.0.0 --port 8000
+   python -c "import secrets; print(secrets.token_urlsafe(48))"
    ```
 
-5. Test from the Linux box:
+   The bridge refuses to start if `BRIDGE_TOKEN` is missing or shorter than 32 chars.
+
+4. Run the bridge — **localhost only**; `cloudflared` forwards to it:
 
    ```
-   curl http://<vm-ip>:8000/health
+   uvicorn server:app --host 127.0.0.1 --port 8000
+   ```
+
+5. Set up the tunnel and Access application: [CLOUDFLARE.md](CLOUDFLARE.md).
+
+6. Test from the Linux box:
+
+   ```
+   curl https://bridge.example.com/health \
+     -H "Authorization: Bearer $BRIDGE_TOKEN" \
+     -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+     -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET"
    # {"status": "ok", "mt5_connected": true}
    ```
 
@@ -52,7 +67,17 @@ No business logic lives here — prices and volumes pass through as-is.
 
 Returns **503** when MT5 is not connected (it retries the connection once per request).
 
+All endpoints, including `/health`, require `Authorization: Bearer <BRIDGE_TOKEN>`
+and return **401** otherwise. Interactive docs (`/docs`, `/openapi.json`) are disabled.
+
 ## Security
 
-There is **no authentication** — run this only on a private/internal network
-(e.g., host-only VM network). Do not expose port 8000 to the internet.
+Two layers:
+
+1. **Cloudflare Access** — a Service Auth policy only lets requests with a valid
+   service token (`CF-Access-Client-Id` / `CF-Access-Client-Secret`) reach the tunnel.
+2. **Bearer token** — the bridge itself checks `BRIDGE_TOKEN` (constant-time compare)
+   and logs every failed attempt with the client IP.
+
+The bridge binds to `127.0.0.1` only, so nothing on the network can reach it
+except through `cloudflared`. Never bind it to `0.0.0.0` or open port 8000 in the firewall.

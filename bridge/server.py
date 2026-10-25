@@ -7,18 +7,22 @@ talks to this bridge over HTTP instead of importing MetaTrader5 directly.
 This is a thin wrapper — no business logic, no conversions.
 Prices and volumes are returned exactly as MT5 reports them.
 
-Run:
-    uvicorn server:app --host 0.0.0.0 --port 8000
+Every request must carry `Authorization: Bearer <BRIDGE_TOKEN>`.
+This is the second layer of defense behind Cloudflare Access.
+
+Run (localhost only — cloudflared forwards to it):
+    uvicorn server:app --host 127.0.0.1 --port 8000
 """
 
 import os
+import sys
 import logging
+import secrets
 from contextlib import asynccontextmanager
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel
 
 import MetaTrader5 as mt5
@@ -27,6 +31,16 @@ load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [bridge] %(levelname)s: %(message)s")
 logger = logging.getLogger("bridge")
+
+MIN_TOKEN_LENGTH = 32
+
+BRIDGE_TOKEN = os.getenv("BRIDGE_TOKEN", "")
+if len(BRIDGE_TOKEN) < MIN_TOKEN_LENGTH:
+    logger.critical(
+        f"BRIDGE_TOKEN is missing or shorter than {MIN_TOKEN_LENGTH} chars — refusing to start. "
+        'Generate one with: python -c "import secrets; print(secrets.token_urlsafe(48))"'
+    )
+    sys.exit(1)
 
 TIMEFRAMES = {
     "M1": mt5.TIMEFRAME_M1,
@@ -98,6 +112,31 @@ def detect_filling_mode(symbol: str) -> int:
     return mt5.ORDER_FILLING_RETURN
 
 
+# ─── Auth ────────────────────────────────────────────────────
+
+def require_token(request: Request):
+    """Reject any request without the correct bearer token."""
+    header = request.headers.get("authorization", "")
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() == "bearer" and secrets.compare_digest(
+        token.strip().encode(), BRIDGE_TOKEN.encode()
+    ):
+        return
+
+    # Behind cloudflared the TCP peer is always 127.0.0.1 — prefer the
+    # real client IP that Cloudflare forwards (used for logging only).
+    client = request.headers.get("cf-connecting-ip") or (
+        request.client.host if request.client else "unknown"
+    )
+    reason = "missing token" if not header else "invalid token"
+    logger.warning(f"Auth failed ({reason}): {request.method} {request.url.path} from {client}")
+    raise HTTPException(
+        status_code=401,
+        detail="Unauthorized",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if not mt5_connect():
@@ -107,14 +146,16 @@ async def lifespan(app: FastAPI):
     logger.info("MT5 shut down")
 
 
-app = FastAPI(title="MT5 Bridge", version="0.1.0", lifespan=lifespan)
-
-# CORS for development — bridge lives on an internal network
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+# Auth applies to every endpoint, /health included. Docs are disabled so
+# nothing is reachable without the token.
+app = FastAPI(
+    title="MT5 Bridge",
+    version="0.1.0",
+    lifespan=lifespan,
+    dependencies=[Depends(require_token)],
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 
