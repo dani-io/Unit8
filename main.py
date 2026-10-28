@@ -175,7 +175,11 @@ def main():
                     # Check for open positions first
                     positions = broker.get_positions(symbol)
                     if positions:
-                        engine.check_risk_free(symbol)
+                        # SL/TP stay fixed unless the strategy turns this on
+                        # (Daniel: decide on risk-free / break-even after
+                        # backtests and live results).
+                        if config.get("risk", {}).get("risk_free_at_1r", False):
+                            engine.check_risk_free(symbol)
                         continue
                     
                     # Get data
