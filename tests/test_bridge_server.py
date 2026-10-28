@@ -35,6 +35,16 @@ def fake_mt5() -> types.ModuleType:
     mt5.last_error = lambda: (0, "")
     mt5.terminal_info = lambda: object()
     mt5.account_info = lambda: types.SimpleNamespace(name="test", balance=1000.0, equity=1000.0, margin=0.0)
+    mt5.symbol_select = lambda *a: True
+
+    def copy_rates_range(symbol, tf, start, end):
+        import numpy as np
+        t0, t1 = int(start.timestamp()), int(end.timestamp())
+        times = range(t0 - t0 % 60, t1 + 1, 60)
+        dt = [("time", "i8"), ("open", "f8"), ("high", "f8"), ("low", "f8"), ("close", "f8"), ("tick_volume", "i8")]
+        return np.array([(t, 1.1, 1.2, 1.0, 1.15, 5) for t in times if t >= t0], dtype=dt)
+
+    mt5.copy_rates_range = copy_rates_range
     return mt5
 
 
@@ -59,6 +69,18 @@ class BridgeServerAuthTest(unittest.TestCase):
         r = self.client.get("/health", headers={"Authorization": f"Bearer {TOKEN}"})
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["status"], "ok")
+
+    def test_history_range(self):
+        h = {"Authorization": f"Bearer {TOKEN}"}
+        r = self.client.get("/history/EURUSD/M1", params={"start": 1_700_000_040, "end": 1_700_000_040 + 600}, headers=h)
+        self.assertEqual(r.status_code, 200)
+        bars = r.json()
+        self.assertEqual(len(bars), 11)
+        self.assertEqual(bars[0]["time"], 1_700_000_040)
+        self.assertEqual(set(bars[0]), {"time", "open", "high", "low", "close", "volume"})
+        bad = self.client.get("/history/EURUSD/M1", params={"start": 10, "end": 5}, headers=h)
+        self.assertEqual(bad.status_code, 400)
+        self.assertEqual(self.client.get("/history/EURUSD/M1", params={"start": 1, "end": 2}).status_code, 401)
 
     def test_missing_token(self):
         with self.assertLogs("bridge", "WARNING") as logs:

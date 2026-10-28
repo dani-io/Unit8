@@ -18,6 +18,7 @@ import os
 import sys
 import logging
 import secrets
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -238,6 +239,64 @@ def ohlcv(symbol: str, timeframe: str, count: int = Query(default=512, ge=1, le=
         raise HTTPException(
             status_code=404,
             detail=f"No data for {symbol} {timeframe}: {mt5.last_error()}",
+        )
+
+    return [
+        {
+            "time": int(r["time"]),
+            "open": float(r["open"]),
+            "high": float(r["high"]),
+            "low": float(r["low"]),
+            "close": float(r["close"]),
+            "volume": int(r["tick_volume"]),
+        }
+        for r in rates
+    ]
+
+
+MAX_HISTORY_BARS = 100_000
+
+
+@app.get("/history/{symbol}/{timeframe}")
+def history(
+    symbol: str,
+    timeframe: str,
+    start: int = Query(..., description="Unix seconds, inclusive (bar time as MT5 reports it)"),
+    end: int = Query(..., description="Unix seconds, inclusive"),
+):
+    """
+    OHLCV bars in a time range — for backtests that need more than /ohlcv's
+    10 000 most recent bars. Callers page through long periods in chunks
+    (BridgeBroker.get_history does). Max 100 000 bars per request.
+
+    How far back MT5 can go depends on the broker's history and the
+    terminal's "Max bars in chart" setting (Tools → Options → Charts).
+    """
+    require_mt5()
+    tf = TIMEFRAMES.get(timeframe)
+    if tf is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown timeframe: {timeframe}. Supported: {list(TIMEFRAMES.keys())}",
+        )
+    if end < start:
+        raise HTTPException(status_code=400, detail="end must be >= start")
+
+    mt5.symbol_select(symbol, True)
+    rates = mt5.copy_rates_range(
+        symbol, tf,
+        datetime.fromtimestamp(start, tz=timezone.utc),
+        datetime.fromtimestamp(end, tz=timezone.utc),
+    )
+    if rates is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No history for {symbol} {timeframe}: {mt5.last_error()}",
+        )
+    if len(rates) > MAX_HISTORY_BARS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"{len(rates)} bars in range; max {MAX_HISTORY_BARS} — request a shorter range",
         )
 
     return [

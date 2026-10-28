@@ -91,7 +91,7 @@ class BridgeBroker(BaseBroker):
 
     # ─── HTTP helpers ─────────────────────────────────────────
 
-    def _request(self, method: str, path: str, **kwargs) -> Optional[Any]:
+    def _request(self, method: str, path: str, timeout: float = None, **kwargs) -> Optional[Any]:
         # GETs are retried once on a dropped connection: an idle keep-alive
         # connection can be closed by Cloudflare between polls. POSTs are
         # never retried — the order may already have been placed.
@@ -102,7 +102,7 @@ class BridgeBroker(BaseBroker):
                 # Cloudflare Access is bouncing us to its login page.
                 resp = self._session.request(
                     method, f"{self.url}{path}",
-                    timeout=self.timeout, allow_redirects=False, **kwargs,
+                    timeout=timeout or self.timeout, allow_redirects=False, **kwargs,
                 )
                 break
             except requests.ConnectionError as e:
@@ -134,8 +134,8 @@ class BridgeBroker(BaseBroker):
             logger.error(f"{method} {path} returned non-JSON: {resp.text[:200]}")
             return None
 
-    def _get(self, path: str, params: dict = None) -> Optional[Any]:
-        return self._request("GET", path, params=params)
+    def _get(self, path: str, params: dict = None, timeout: float = None) -> Optional[Any]:
+        return self._request("GET", path, timeout=timeout, params=params)
 
     def _post(self, path: str, body: dict) -> Optional[Any]:
         return self._request("POST", path, json=body)
@@ -188,6 +188,28 @@ class BridgeBroker(BaseBroker):
         if not data:
             return None
         df = pd.DataFrame(data)
+        df["time"] = pd.to_datetime(df["time"], unit="s")
+        return df
+
+    def get_history(self, symbol: str, timeframe: str, start, end,
+                    chunk_days: int = 30) -> Optional[pd.DataFrame]:
+        """
+        Bars between two times (datetime or unix seconds), fetched in
+        chunks from the bridge's /history endpoint. Times are MT5 bar times.
+        """
+        to_unix = lambda t: int(pd.Timestamp(t).timestamp()) if not isinstance(t, (int, float)) else int(t)
+        s, e = to_unix(start), to_unix(end)
+        step = chunk_days * 86400
+        frames = []
+        while s <= e:
+            chunk_end = min(s + step - 1, e)
+            data = self._get(f"/history/{symbol}/{timeframe}", params={"start": s, "end": chunk_end}, timeout=120)
+            if data:
+                frames.append(pd.DataFrame(data))
+            s = chunk_end + 1
+        if not frames:
+            return None
+        df = pd.concat(frames).drop_duplicates("time").sort_values("time").reset_index(drop=True)
         df["time"] = pd.to_datetime(df["time"], unit="s")
         return df
 

@@ -22,7 +22,7 @@ from typing import List, Optional
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 
 from broker.bridge_broker import BridgeBroker
 from broker.mock_broker import MockBroker
@@ -203,6 +203,24 @@ def chart(
             for pt in patterns
         ],
     }
+
+
+@app.get("/api/history")
+def history(
+    symbol: str = Query("EURUSD", min_length=3, max_length=20),
+    timeframe: str = Query("M1"),
+    start: str = Query(..., description="ISO date/time, e.g. 2026-06-01"),
+    end: str = Query(..., description="ISO date/time"),
+):
+    """Raw OHLCV for a period, as CSV — data for backtests (bridge only)."""
+    symbol, timeframe = symbol.upper(), timeframe.upper()
+    if timeframe not in TIMEFRAMES:
+        raise HTTPException(400, f"Unknown timeframe. Supported: {TIMEFRAMES}")
+    broker = _broker("bridge")
+    df = broker.get_history(symbol, timeframe, pd.Timestamp(start), pd.Timestamp(end))
+    if df is None or df.empty:
+        raise HTTPException(404, f"No history for {symbol} {timeframe} {start}..{end}")
+    return PlainTextResponse(df.to_csv(index=False), media_type="text/csv")
 
 
 @app.get("/")
