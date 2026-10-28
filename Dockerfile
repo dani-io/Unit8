@@ -1,6 +1,7 @@
-# Unit8 — trading worker image.
-# Runs main.py as a long-lived process (no HTTP port). On Linux it trades
-# through the MT5 bridge (broker type "bridge"); credentials come from env.
+# Unit8 image — one image, two services (UNIT8_SERVICE):
+#   worker (default): main.py trading loop, no HTTP port; trades through
+#                     the MT5 bridge, credentials from env
+#   chart:            read-only chart/analysis API + page on port 8000
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -22,4 +23,5 @@ COPY . .
 RUN useradd --create-home --uid 1000 unit8 && chown -R unit8:unit8 /app
 USER unit8
 
-CMD ["python", "main.py"]
+EXPOSE 8000
+ENTRYPOINT ["./docker-entrypoint.sh"]

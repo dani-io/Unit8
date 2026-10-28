@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unit8 Chart</title>
+<style>
+  :root {
+    --bg: #ffffff; --panel: #f5f6f8; --text: #1b1f24; --muted: #6a7380; --border: #dde1e6;
+    --up: #26a69a; --down: #ef5350; --zz-up: #1e88e5; --zz-down: #e53935;
+    --zz-live: #9e9e9e; --swing: #fb8c00; --grid: #eef0f3; --accent: #1e88e5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #131722; --panel: #1c2130; --text: #d1d4dc; --muted: #8a93a6; --border: #2a3142;
+      --grid: #1f2433; --zz-live: #b0b0b0;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #131722; --panel: #1c2130; --text: #d1d4dc; --muted: #8a93a6; --border: #2a3142;
+    --grid: #1f2433; --zz-live: #b0b0b0;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { display: flex; flex-direction: column; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: end; padding: 10px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 15px; margin: 0 8px 4px 0; letter-spacing: .02em; }
+  label { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--muted); }
+  input, select, button { font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; }
+  input[type=number] { width: 64px; }
+  input.sym { width: 84px; text-transform: uppercase; }
+  fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 2px 8px 6px; margin: 0;
+    display: flex; gap: 8px; align-items: end; }
+  legend { font-size: 11px; color: var(--muted); padding: 0 4px; }
+  .check { flex-direction: row; align-items: center; gap: 4px; color: var(--text); font-size: 12px; }
+  button { background: var(--accent); color: #fff; border-color: var(--accent); cursor: pointer; padding: 5px 14px; }
+  button:disabled { opacity: .6; cursor: wait; }
+  #chart { flex: 1; min-height: 320px; position: relative; }
+  #status { position: absolute; top: 10px; left: 16px; z-index: 5; color: var(--muted); font-size: 12px; pointer-events: none; }
+  #stats { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 8px 16px; border-top: 1px solid var(--border);
+    background: var(--panel); font-size: 12px; color: var(--muted); }
+  #stats b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .key { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 4px; border-radius: 2px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; vertical-align: middle; margin-right: 4px; }
+  .err { color: var(--down) !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Unit8</h1>
+  <label>Symbol <input class="sym" id="symbol" value="EURUSD"></label>
+  <label>TF <select id="timeframe">
+    <option>M1</option><option>M5</option><option selected>M15</option><option>M30</option>
+    <option>H1</option><option>H4</option><option>D1</option></select></label>
+  <label>Bars <input type="number" id="count" value="1000" min="50" max="5000" step="50"></label>
+  <label>Source <select id="source"><option value="">default</option><option value="bridge">bridge</option><option value="csv">csv</option></select></label>
+  <fieldset><legend>ZigZag</legend>
+    <label class="check"><input type="checkbox" id="showZZ" checked>show</label>
+    <label>Depth <input type="number" id="depth" value="12" min="2"></label>
+    <label>Dev <input type="number" id="deviation" value="5" min="0"></label>
+    <label>Back <input type="number" id="backstep" value="3" min="1"></label>
+  </fieldset>
+  <fieldset><legend>swing_detector</legend>
+    <label class="check"><input type="checkbox" id="showSD" checked>show</label>
+    <label>Window <input type="number" id="window" value="5" min="1"></label>
+    <label>MinDist <input type="number" id="min_distance" value="5" min="0"></label>
+  </fieldset>
+  <button id="load">Load</button>
+</header>
+<div id="chart"><div id="status">Loading…</div></div>
+<div id="stats"></div>
+
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const FIELDS = ["symbol", "timeframe", "count", "source", "depth", "deviation", "backstep", "window", "min_distance"];
+const TOGGLES = ["showZZ", "showSD"];
+
+// Remember the last settings (per browser only)
+try {
+  const saved = JSON.parse(localStorage.getItem("unit8-chart") || "{}");
+  FIELDS.forEach((f) => { if (saved[f] != null) $(f).value = saved[f]; });
+  TOGGLES.forEach((f) => { if (saved[f] != null) $(f).checked = saved[f]; });
+} catch (e) {}
+function save() {
+  try {
+    const s = {};
+    FIELDS.forEach((f) => (s[f] = $(f).value));
+    TOGGLES.forEach((f) => (s[f] = $(f).checked));
+    localStorage.setItem("unit8-chart", JSON.stringify(s));
+  } catch (e) {}
+}
+
+const chartEl = $("chart");
+const chart = LightweightCharts.createChart(chartEl, {
+  autoSize: true,
+  layout: { background: { color: css("--bg") }, textColor: css("--text") },
+  grid: { vertLines: { color: css("--grid") }, horzLines: { color: css("--grid") } },
+  rightPriceScale: { borderColor: css("--border") },
+  timeScale: { borderColor: css("--border"), timeVisible: true, secondsVisible: false },
+  crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+});
+const candles = chart.addCandlestickSeries({
+  upColor: css("--up"), downColor: css("--down"), wickUpColor: css("--up"), wickDownColor: css("--down"),
+  borderVisible: false,
+});
+let legSeries = [];
+let data = null;
+
+function clearLegs() { legSeries.forEach((s) => chart.removeSeries(s)); legSeries = []; }
+
+function draw() {
+  if (!data) return;
+  clearLegs();
+  const prec = data.point ? Math.max(0, Math.round(-Math.log10(data.point))) : 5;
+  candles.applyOptions({ priceFormat: { type: "price", precision: prec, minMove: data.point || 0.00001 } });
+
+  // ZigZag: one short series per leg, colored by direction (like MT5 screenshots)
+  if ($("showZZ").checked) {
+    const zz = data.zigzag;
+    for (let i = 1; i < zz.length; i++) {
+      const a = zz[i - 1], b = zz[i];
+      const live = !b.confirmed;
+      const s = chart.addLineSeries({
+        color: live ? css("--zz-live") : (b.price > a.price ? css("--zz-up") : css("--zz-down")),
+        lineWidth: 2, lineStyle: live ? 2 : 0,
+        priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+      });
+      s.setData([{ time: a.time, value: a.price }, { time: b.time, value: b.price }]);
+      legSeries.push(s);
+    }
+  }
+
+  // swing_detector: dots above highs / below lows
+  const markers = $("showSD").checked
+    ? data.swings.map((p) => ({
+        time: p.time,
+        position: p.type === "high" ? "aboveBar" : "belowBar",
+        shape: "circle", size: 0.6, color: css("--swing"),
+      }))
+    : [];
+  candles.setMarkers(markers.sort((x, y) => x.time - y.time));
+}
+
+function showStats() {
+  const c = data.comparison;
+  const pct = (n, d) => (d ? Math.round((100 * n) / d) + "%" : "–");
+  const live = data.zigzag.length && !data.zigzag[data.zigzag.length - 1].confirmed;
+  $("stats").innerHTML = `
+    <span>${data.symbol} ${data.timeframe} · <b>${data.candles.length}</b> bars · source <b>${data.source}</b></span>
+    <span><span class="key" style="background:${css("--zz-up")}"></span><span class="key" style="background:${css("--zz-down")}"></span>ZigZag confirmed pivots <b>${c.zigzag_pivots}</b>${live ? ` <span class="key" style="background:${css("--zz-live")}"></span>last leg still forming` : ""}</span>
+    <span><span class="dot" style="background:${css("--swing")}"></span>swing_detector points <b>${c.swing_points}</b></span>
+    <span>ZigZag pivots also found by swing_detector (±${c.tolerance_bars} bars): <b>${c.zigzag_found_by_swing}</b> (${pct(c.zigzag_found_by_swing, c.zigzag_pivots)})</span>
+    <span>swing_detector points on a ZigZag pivot: <b>${c.swing_on_zigzag}</b> (${pct(c.swing_on_zigzag, c.swing_points)})</span>
+    <span>swing_detector same-type in a row: <b>${c.swing_consecutive_same_type}</b></span>`;
+}
+
+async function load() {
+  save();
+  const btn = $("load");
+  btn.disabled = true;
+  $("status").textContent = "Loading…";
+  $("status").classList.remove("err");
+  const q = new URLSearchParams();
+  FIELDS.forEach((f) => { if ($(f).value !== "") q.set(f, $(f).value); });
+  try {
+    const r = await fetch("api/chart?" + q);
+    const body = await r.json();
+    if (!r.ok) throw new Error(body.detail || r.statusText);
+    const first = !data;
+    data = body;
+    candles.setData(data.candles);
+    draw();
+    showStats();
+    if (first) chart.timeScale().fitContent();
+    $("status").textContent = "";
+  } catch (e) {
+    $("status").textContent = "Error: " + e.message;
+    $("status").classList.add("err");
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+$("load").addEventListener("click", load);
+document.querySelectorAll("header input").forEach((el) =>
+  el.addEventListener("keydown", (e) => { if (e.key === "Enter") load(); }));
+TOGGLES.forEach((f) => $(f).addEventListener("change", () => { save(); draw(); }));
+load();
+</script>
+</body>
+</html>
