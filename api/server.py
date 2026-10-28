@@ -28,6 +28,7 @@ from broker.bridge_broker import BridgeBroker
 from broker.mock_broker import MockBroker
 from tools import SwingDetector, ZigZag
 from tools.market_structure import analyze_structure
+from tools.trendline import build_trendlines
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("unit8.chart")
@@ -146,6 +147,7 @@ def chart(
     sd = SwingDetector({"window": window, "min_distance": min_distance}).find_swings(df)
 
     structure = analyze_structure(df, zz)
+    trendlines = build_trendlines(df, structure)
     labels = {p["index"]: p["label"] for p in structure["pivots"]}
     zz = [{**p, "label": labels.get(p["index"])} for p in zz]
 
@@ -174,6 +176,18 @@ def chart(
                 for e in structure["events"]
             ],
         },
+        "trendlines": [
+            {
+                "direction": ln["direction"],
+                "anchor_time": _ts(ln["anchor_time"]), "anchor_price": ln["anchor_price"],
+                "through_time": _ts(ln["through_time"]), "through_price": ln["through_price"],
+                "end_time": _ts(ln["end_time"]), "end_price": ln["end_price"],
+                "frozen": ln["frozen_at"] is not None,
+                "refits": ln["refits"],
+                "cross_times": [_ts(t) for t in ln["final_cross_times"]],
+            }
+            for ln in trendlines
+        ],
     }
 
 

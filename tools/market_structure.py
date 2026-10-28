@@ -167,8 +167,9 @@ class MarketStructure(BaseTool):
 
     def check(self, df: pd.DataFrame, symbol: str = "", context: dict = None) -> ToolResult:
         pivots = None
-        if context and context.get("zigzag") is not None:
-            pivots = context["zigzag"].data.get("pivots")
+        # The checklist stores each tool's result.data under its name
+        if context and context.get("zigzag"):
+            pivots = context["zigzag"].get("pivots")
         if pivots is None:
             point = context["tick"].get("point") if context and context.get("tick") else None
             pivots = ZigZag(self.config).find_pivots(df, point=point)

@@ -71,6 +71,7 @@
   <fieldset><legend>Structure</legend>
     <label class="check"><input type="checkbox" id="showLabels" checked>HH/HL</label>
     <label class="check"><input type="checkbox" id="showTrend" checked>trend</label>
+    <label class="check"><input type="checkbox" id="showTL" checked>trendline</label>
     <label class="check"><input type="checkbox" id="showBOS">BOS</label>
   </fieldset>
   <button id="load">Load</button>
@@ -83,7 +84,7 @@
 const $ = (id) => document.getElementById(id);
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const FIELDS = ["symbol", "timeframe", "count", "source", "depth", "deviation", "backstep", "window", "min_distance"];
-const TOGGLES = ["showZZ", "showSD", "showLabels", "showTrend", "showBOS"];
+const TOGGLES = ["showZZ", "showSD", "showLabels", "showTrend", "showTL", "showBOS"];
 
 // Remember the last settings (per browser only)
 try {
@@ -148,6 +149,24 @@ function draw() {
   }
 
   const markers = [];
+
+  // Trendlines: from the trend's start through the swing it rests on,
+  // extended until the next trend starts. "TL" = a close across the line.
+  if ($("showTL").checked) {
+    data.trendlines.forEach((ln) => {
+      const color = ln.direction === "up" ? css("--bull") : css("--bear");
+      const s = chart.addLineSeries({
+        color, lineWidth: 3,
+        priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+      });
+      s.setData([{ time: ln.anchor_time, value: ln.anchor_price }, { time: ln.end_time, value: ln.end_price }]);
+      legSeries.push(s);
+      ln.cross_times.forEach((t) => markers.push({
+        time: t, position: ln.direction === "up" ? "belowBar" : "aboveBar",
+        shape: "circle", size: 0.5, color, text: "TL",
+      }));
+    });
+  }
 
   // swing_detector: dots above highs / below lows
   if ($("showSD").checked) {
