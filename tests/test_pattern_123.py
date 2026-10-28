@@ -42,7 +42,9 @@ class Pattern123Test(unittest.TestCase):
         self.assertEqual([p[k]["index"] for k in ("A", "B", "1", "2", "3")], [160, 180, 200, 220, 240])
         self.assertAlmostEqual(p["extension"], 0.0097 / 0.0042, places=6)
         self.assertTrue(p["3"]["ideal"])
-        self.assertEqual(p["sl"], p["1"]["price"])
+        ab = p["A"]["price"] - p["B"]["price"]
+        self.assertAlmostEqual(p["sl"], p["1"]["price"] + 0.2 * ab)
+        self.assertAlmostEqual(p["tp"], p["2"]["price"] - 2 * (p["3"]["price"] - p["2"]["price"]))
 
     def test_completed_then_never_invalid(self):
         # Breaks 2 after 3, then much later rallies above 1: stays completed
@@ -85,7 +87,9 @@ class Pattern123Test(unittest.TestCase):
         r = Pattern123({"point": 0.00001, "depth": 5}).check(df)
         self.assertTrue(r.passed, r.reason)
         self.assertEqual(r.signal, "sell")
-        self.assertNotIn("tp", r.data)      # no TP rules yet → engine can't trade
+        self.assertNotIn("tp", r.data)      # orders disabled by default → engine can't trade
+        r_on = Pattern123({"point": 0.00001, "depth": 5, "allow_orders": True}).check(df)
+        self.assertIn("tp", r_on.data)
         # One more leg later the setup is stale
         r2 = Pattern123({"point": 0.00001, "depth": 5}).check(_path(BASE + [+0.0030, -0.0030]))
         self.assertFalse(r2.passed)

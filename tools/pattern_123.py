@@ -13,7 +13,9 @@ End of an uptrend → SELL setup (a downtrend's end is the exact mirror → BUY)
            otherwise it may only be a higher-timeframe correction
     3  the pullback between 1 and 2; ideal below B (B flips to resistance),
        above B but below 1 is valid, not ideal
-    Invalid: a candle closes above 1 (the uptrend continues). SL = 1.
+    Invalid: a candle closes above 1 (the uptrend continues).
+    SL = 1 + 20% of AB (beyond 1).   TP = 2 − k·|2 − 3|, k = 2 (Daniel's
+    training rules; k = 1 = "the size of the 2→3 pullback").
 
 The trendline break counts only through the 200% rule — a close across the
 line without reaching 200% is not a break.
@@ -40,6 +42,8 @@ DEFAULTS = {
     "p1_tolerance": 0.20,   # |1 − A| ≤ 20% of AB
     "min_extension": 2.0,   # 2 must reach 200% of AB from A
     "max_trend_retrace": 0.5,  # A→2 ≤ 50% of the previous trend
+    "sl_buffer": 0.20,      # SL = 1 + 20% of AB beyond it
+    "tp_multiple": 2.0,     # TP = 2 + k·|2−3| in the trade direction
 }
 
 
@@ -158,6 +162,9 @@ def detect_123(df: pd.DataFrame, pivots: List[dict], structure: dict,
         else:
             status = "ready"
 
+        sl = P1 - d * cfg["sl_buffer"] * ab
+        tp = P2 + d * cfg["tp_multiple"] * abs(three["price"] - P2) if three else None
+
         out.append({
             "direction": direction,
             "status": status,
@@ -168,7 +175,8 @@ def detect_123(df: pd.DataFrame, pivots: List[dict], structure: dict,
             "b_break_index": b_break,
             "invalid_at": invalid_at,
             "completed_at": completed_at,
-            "sl": P1,
+            "sl": sl,
+            "tp": tp,
             "checks": {k: {"ok": v[0], "note": v[1]} for k, v in checks.items()},
         })
 
@@ -187,10 +195,12 @@ class Pattern123(BaseTool):
     on the leg that started at 3 (no newer swing yet), signal = buy/sell.
 
     data: {"patterns": [...], "pattern": latest, "sl": point 1}
-    TP is intentionally absent until the take-profit rules are defined — the
-    execution engine needs both sl and tp, so no order can be placed yet.
+    "tp" is only handed to the execution engine when config "allow_orders"
+    is true — the engine needs both sl and tp, so by default the bot only
+    analyses and never places an order.
 
-    Config: p1_tolerance, min_extension, max_trend_retrace (+ ZigZag keys).
+    Config: p1_tolerance, min_extension, max_trend_retrace, sl_buffer,
+            tp_multiple, allow_orders (+ ZigZag keys).
     """
 
     name = "pattern_123"
@@ -214,6 +224,8 @@ class Pattern123(BaseTool):
             return self._fail("No active 1-2-3")
         p = live[-1]
         data = {"patterns": patterns, "pattern": p, "sl": p["sl"]}
+        if self.config.get("allow_orders") and p["tp"] is not None:
+            data["tp"] = p["tp"]
         fresh = p["3"] is not None and pivots[-1]["index"] > p["3"]["index"] and \
             pivots.index(next(q for q in pivots if q["index"] == p["3"]["index"])) == len(pivots) - 2
         # Entry rules are still open: for now the setup counts while price is
