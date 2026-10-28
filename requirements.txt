@@ -6,6 +6,7 @@ requests>=2.31.0
 
 # Broker: cTrader (Linux/Mac/Windows)
 ctrader-open-api>=0.9.2
+service_identity>=24.1.0   # proper TLS hostname checks for Twisted (cTrader)
 
 # Broker: MT5 (Windows only)
 # MetaTrader5>=5.0.45

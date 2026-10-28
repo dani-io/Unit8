@@ -1,0 +1,17 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+**/__pycache__
+*.py[cod]
+venv/
+.venv/
+*.log
+.vscode/
+.idea/
+# The bridge runs on the Windows VPS, not in this image
+bridge/
+tests/
+Dockerfile
+.dockerignore

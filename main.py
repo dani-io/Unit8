@@ -16,6 +16,13 @@ import logging
 import os
 from datetime import datetime
 
+# Load .env for local runs; in Docker/Coolify env vars are injected directly
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 # Make imports work regardless of where main.py is run from
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -119,7 +126,11 @@ def is_trading_time(schedule: dict) -> bool:
 
 def main():
     # --- 1. Load config (optional path as first CLI arg) ---
-    config_path = sys.argv[1] if len(sys.argv) > 1 else "config/checklist_example.json"
+    # Priority: CLI arg → UNIT8_CONFIG env → example config
+    config_path = (
+        sys.argv[1] if len(sys.argv) > 1
+        else os.getenv("UNIT8_CONFIG", "config/checklist_example.json")
+    )
     config = load_checklist_config(config_path)
     logger.info(f"Loaded strategy: {config['name']}")
 
@@ -127,7 +138,7 @@ def main():
     broker = build_broker(config)
     if not broker.connect():
         logger.error("Failed to connect to broker")
-        return
+        sys.exit(1)  # non-zero so Docker/Coolify restarts the container
     
     # --- 3. Build tools ---
     tools = build_tools(config["checks"])
