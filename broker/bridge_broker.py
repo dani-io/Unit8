@@ -92,16 +92,28 @@ class BridgeBroker(BaseBroker):
     # ─── HTTP helpers ─────────────────────────────────────────
 
     def _request(self, method: str, path: str, **kwargs) -> Optional[Any]:
-        try:
-            # No redirects: the bridge never redirects, so one means
-            # Cloudflare Access is bouncing us to its login page.
-            resp = self._session.request(
-                method, f"{self.url}{path}",
-                timeout=self.timeout, allow_redirects=False, **kwargs,
-            )
-        except requests.RequestException as e:
-            logger.error(f"{method} {path} failed: {e}")
-            return None
+        # GETs are retried once on a dropped connection: an idle keep-alive
+        # connection can be closed by Cloudflare between polls. POSTs are
+        # never retried — the order may already have been placed.
+        attempts = 2 if method == "GET" else 1
+        for attempt in range(attempts):
+            try:
+                # No redirects: the bridge never redirects, so one means
+                # Cloudflare Access is bouncing us to its login page.
+                resp = self._session.request(
+                    method, f"{self.url}{path}",
+                    timeout=self.timeout, allow_redirects=False, **kwargs,
+                )
+                break
+            except requests.ConnectionError as e:
+                if attempt + 1 < attempts:
+                    logger.warning(f"{method} {path} connection dropped, retrying: {e}")
+                    continue
+                logger.error(f"{method} {path} failed: {e}")
+                return None
+            except requests.RequestException as e:
+                logger.error(f"{method} {path} failed: {e}")
+                return None
 
         if _is_cf_access_rejection(resp):
             logger.error(

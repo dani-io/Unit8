@@ -8,17 +8,17 @@
   :root {
     --bg: #ffffff; --panel: #f5f6f8; --text: #1b1f24; --muted: #6a7380; --border: #dde1e6;
     --up: #26a69a; --down: #ef5350; --zz-up: #1e88e5; --zz-down: #e53935;
-    --zz-live: #9e9e9e; --swing: #fb8c00; --grid: #eef0f3; --accent: #1e88e5;
+    --zz-live: #8e24aa; --swing: #fb8c00; --bull: #2e7d32; --bear: #c62828; --flat: #9e9e9e; --grid: #eef0f3; --accent: #1e88e5;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       --bg: #131722; --panel: #1c2130; --text: #d1d4dc; --muted: #8a93a6; --border: #2a3142;
-      --grid: #1f2433; --zz-live: #b0b0b0;
+      --grid: #1f2433; --zz-live: #ce93d8;
     }
   }
   :root[data-theme="dark"] {
     --bg: #131722; --panel: #1c2130; --text: #d1d4dc; --muted: #8a93a6; --border: #2a3142;
-    --grid: #1f2433; --zz-live: #b0b0b0;
+    --grid: #1f2433; --zz-live: #ce93d8;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
@@ -64,9 +64,14 @@
     <label>Back <input type="number" id="backstep" value="3" min="1"></label>
   </fieldset>
   <fieldset><legend>swing_detector</legend>
-    <label class="check"><input type="checkbox" id="showSD" checked>show</label>
+    <label class="check"><input type="checkbox" id="showSD">show</label>
     <label>Window <input type="number" id="window" value="5" min="1"></label>
     <label>MinDist <input type="number" id="min_distance" value="5" min="0"></label>
+  </fieldset>
+  <fieldset><legend>Structure</legend>
+    <label class="check"><input type="checkbox" id="showLabels" checked>HH/HL</label>
+    <label class="check"><input type="checkbox" id="showTrend" checked>trend</label>
+    <label class="check"><input type="checkbox" id="showBOS">BOS</label>
   </fieldset>
   <button id="load">Load</button>
 </header>
@@ -78,7 +83,7 @@
 const $ = (id) => document.getElementById(id);
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const FIELDS = ["symbol", "timeframe", "count", "source", "depth", "deviation", "backstep", "window", "min_distance"];
-const TOGGLES = ["showZZ", "showSD"];
+const TOGGLES = ["showZZ", "showSD", "showLabels", "showTrend", "showBOS"];
 
 // Remember the last settings (per browser only)
 try {
@@ -108,6 +113,13 @@ const candles = chart.addCandlestickSeries({
   upColor: css("--up"), downColor: css("--down"), wickUpColor: css("--up"), wickDownColor: css("--down"),
   borderVisible: false,
 });
+const band = chart.addHistogramSeries({
+  priceScaleId: "band", priceLineVisible: false, lastValueVisible: false,
+  priceFormat: { type: "volume" },
+});
+// Leave room above the trend band for "below bar" markers
+chart.priceScale("right").applyOptions({ scaleMargins: { top: 0.1, bottom: 0.15 } });
+chart.priceScale("band").applyOptions({ scaleMargins: { top: 0.965, bottom: 0 }, visible: false });
 let legSeries = [];
 let data = null;
 
@@ -135,14 +147,64 @@ function draw() {
     }
   }
 
+  const markers = [];
+
   // swing_detector: dots above highs / below lows
-  const markers = $("showSD").checked
-    ? data.swings.map((p) => ({
-        time: p.time,
-        position: p.type === "high" ? "aboveBar" : "belowBar",
-        shape: "circle", size: 0.6, color: css("--swing"),
-      }))
-    : [];
+  if ($("showSD").checked) {
+    data.swings.forEach((p) => markers.push({
+      time: p.time, position: p.type === "high" ? "aboveBar" : "belowBar",
+      shape: "circle", size: 0.6, color: css("--swing"),
+    }));
+  }
+
+  // HH / HL / LH / LL on confirmed ZigZag pivots
+  if ($("showLabels").checked) {
+    const col = { HH: css("--bull"), HL: css("--bull"), LH: css("--bear"), LL: css("--bear") };
+    data.zigzag.forEach((p) => {
+      if (!p.label || !p.confirmed) return;
+      markers.push({
+        time: p.time, position: p.type === "high" ? "aboveBar" : "belowBar",
+        shape: "circle", size: 0, color: col[p.label] || css("--flat"), text: p.label,
+      });
+    });
+  }
+
+  // Trend start / end (anchored where the trend began / ended) + the confirming close
+  const st = data.structure;
+  if ($("showTrend").checked) {
+    st.events.forEach((e) => {
+      if (e.kind === "bos") return;
+      const up = e.direction === "up";
+      const start = e.kind === "trend_start";
+      const color = up ? css("--bull") : css("--bear");
+      const atLow = (up && start) || (!up && !start);
+      markers.push({
+        time: e.anchor_time, position: atLow ? "belowBar" : "aboveBar",
+        shape: atLow ? "arrowUp" : "arrowDown", color,
+        text: (up ? "Up" : "Down") + (start ? " trend start" : " trend end"),
+      });
+      markers.push({
+        time: e.time, position: atLow ? "aboveBar" : "belowBar",   // close above a high for start-up / end-down
+        shape: "square", size: 0.5, color, text: "close",
+      });
+    });
+    const colorOf = { up: css("--bull"), down: css("--bear"), range: css("--flat") };
+    const runs = st.states;
+    let r = 0;
+    band.setData(data.candles.map((c) => {
+      while (r < runs.length - 1 && c.time > runs[r].to) r++;
+      return { time: c.time, value: 1, color: colorOf[runs[r].state] };
+    }));
+  } else {
+    band.setData([]);
+  }
+  if ($("showBOS").checked) {
+    st.events.filter((e) => e.kind === "bos").forEach((e) => markers.push({
+      time: e.time, position: e.direction === "up" ? "aboveBar" : "belowBar",
+      shape: "circle", size: 0.4, color: e.direction === "up" ? css("--bull") : css("--bear"), text: "BOS",
+    }));
+  }
+
   candles.setMarkers(markers.sort((x, y) => x.time - y.time));
 }
 
@@ -151,6 +213,7 @@ function showStats() {
   const pct = (n, d) => (d ? Math.round((100 * n) / d) + "%" : "–");
   const live = data.zigzag.length && !data.zigzag[data.zigzag.length - 1].confirmed;
   $("stats").innerHTML = `
+    <span>Trend now: <b style="color:${css(data.structure.state === "up" ? "--bull" : data.structure.state === "down" ? "--bear" : "--flat")}">${data.structure.state}</b></span>
     <span>${data.symbol} ${data.timeframe} · <b>${data.candles.length}</b> bars · source <b>${data.source}</b></span>
     <span><span class="key" style="background:${css("--zz-up")}"></span><span class="key" style="background:${css("--zz-down")}"></span>ZigZag confirmed pivots <b>${c.zigzag_pivots}</b>${live ? ` <span class="key" style="background:${css("--zz-live")}"></span>last leg still forming` : ""}</span>
     <span><span class="dot" style="background:${css("--swing")}"></span>swing_detector points <b>${c.swing_points}</b></span>
@@ -171,12 +234,11 @@ async function load() {
     const r = await fetch("api/chart?" + q);
     const body = await r.json();
     if (!r.ok) throw new Error(body.detail || r.statusText);
-    const first = !data;
     data = body;
     candles.setData(data.candles);
     draw();
     showStats();
-    if (first) chart.timeScale().fitContent();
+    chart.timeScale().fitContent();
     $("status").textContent = "";
   } catch (e) {
     $("status").textContent = "Error: " + e.message;

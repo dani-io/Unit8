@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse
 from broker.bridge_broker import BridgeBroker
 from broker.mock_broker import MockBroker
 from tools import SwingDetector, ZigZag
+from tools.market_structure import analyze_structure
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("unit8.chart")
@@ -97,6 +98,17 @@ def _compare(zz: List[dict], sd: List[dict], tolerance: int) -> dict:
     }
 
 
+def _segments(states: List[str], times: List[int]) -> List[dict]:
+    """Compress the per-bar trend state into runs: [{state, from, to}]."""
+    runs = []
+    for st, t in zip(states, times):
+        if runs and runs[-1]["state"] == st:
+            runs[-1]["to"] = int(t)
+        else:
+            runs.append({"state": st, "from": int(t), "to": int(t)})
+    return runs
+
+
 @app.get("/api/health")
 def health():
     return {"status": "ok", "default_source": _default_source()}
@@ -133,6 +145,10 @@ def chart(
     zz = ZigZag({"depth": depth, "deviation": deviation, "backstep": backstep}).find_pivots(df, point=point)
     sd = SwingDetector({"window": window, "min_distance": min_distance}).find_swings(df)
 
+    structure = analyze_structure(df, zz)
+    labels = {p["index"]: p["label"] for p in structure["pivots"]}
+    zz = [{**p, "label": labels.get(p["index"])} for p in zz]
+
     times = df["time"].map(_ts)
     candles = [
         {"time": int(t), "open": float(o), "high": float(h), "low": float(l), "close": float(c)}
@@ -147,6 +163,17 @@ def chart(
         "zigzag": _points(zz),
         "swings": _points(sd),
         "comparison": _compare(zz, sd, tolerance),
+        "structure": {
+            "state": structure["state"],
+            "states": _segments(structure["states"], list(times)),
+            "events": [
+                {
+                    k: (_ts(v) if k.endswith("time") else v)
+                    for k, v in e.items()
+                }
+                for e in structure["events"]
+            ],
+        },
     }
 
 
