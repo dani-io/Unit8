@@ -29,6 +29,7 @@ from broker.mock_broker import MockBroker
 from tools import SwingDetector, ZigZag
 from tools.market_structure import analyze_structure
 from tools.trendline import build_trendlines
+from tools.pattern_123 import detect_123
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("unit8.chart")
@@ -148,6 +149,7 @@ def chart(
 
     structure = analyze_structure(df, zz)
     trendlines = build_trendlines(df, structure)
+    patterns = detect_123(df, zz, structure, trendlines)
     labels = {p["index"]: p["label"] for p in structure["pivots"]}
     zz = [{**p, "label": labels.get(p["index"])} for p in zz]
 
@@ -187,6 +189,18 @@ def chart(
                 "cross_times": [_ts(t) for t in ln["final_cross_times"]],
             }
             for ln in trendlines
+        ],
+        "patterns": [
+            {
+                **{k: v for k, v in pt.items() if k not in ("A", "B", "1", "2", "3")},
+                "points": {
+                    k: {**pt[k], "time": _ts(pt[k]["time"])}
+                    for k in ("A", "B", "1", "2", "3") if pt[k]
+                },
+                "invalid_time": _ts(df["time"].iloc[pt["invalid_at"]]) if pt["invalid_at"] is not None else None,
+                "completed_time": _ts(df["time"].iloc[pt["completed_at"]]) if pt["completed_at"] is not None else None,
+            }
+            for pt in patterns
         ],
     }
 

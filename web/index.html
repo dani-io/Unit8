@@ -8,7 +8,7 @@
   :root {
     --bg: #ffffff; --panel: #f5f6f8; --text: #1b1f24; --muted: #6a7380; --border: #dde1e6;
     --up: #26a69a; --down: #ef5350; --zz-up: #1e88e5; --zz-down: #e53935;
-    --zz-live: #8e24aa; --swing: #fb8c00; --bull: #2e7d32; --bear: #c62828; --flat: #9e9e9e; --grid: #eef0f3; --accent: #1e88e5;
+    --zz-live: #8e24aa; --swing: #fb8c00; --bull: #2e7d32; --bear: #c62828; --flat: #9e9e9e; --fib: #d500f9; --sl: #ff6d00; --grid: #eef0f3; --accent: #1e88e5;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -74,6 +74,10 @@
     <label class="check"><input type="checkbox" id="showTL" checked>trendline</label>
     <label class="check"><input type="checkbox" id="showBOS">BOS</label>
   </fieldset>
+  <fieldset><legend>1-2-3</legend>
+    <label class="check"><input type="checkbox" id="show123" checked>patterns</label>
+    <label class="check"><input type="checkbox" id="showRejected">rejected</label>
+  </fieldset>
   <button id="load">Load</button>
 </header>
 <div id="chart"><div id="status">Loading…</div></div>
@@ -84,7 +88,7 @@
 const $ = (id) => document.getElementById(id);
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const FIELDS = ["symbol", "timeframe", "count", "source", "depth", "deviation", "backstep", "window", "min_distance"];
-const TOGGLES = ["showZZ", "showSD", "showLabels", "showTrend", "showTL", "showBOS"];
+const TOGGLES = ["showZZ", "showSD", "showLabels", "showTrend", "showTL", "showBOS", "show123", "showRejected"];
 
 // Remember the last settings (per browser only)
 try {
@@ -149,6 +153,44 @@ function draw() {
   }
 
   const markers = [];
+
+  // 1-2-3 patterns: points, Fib ruler from A (0%) to B (100%) and 200%, SL at 1
+  if ($("show123").checked) {
+    const statusText = { ready: "ready", completed: "completed (closed beyond 2)", waiting_3: "waiting for 3", forming: "forming",
+                         invalid: "invalid (closed beyond 1)", rejected: "rejected" };
+    data.patterns.forEach((pt) => {
+      const rejected = pt.status === "rejected";
+      if (rejected && !$("showRejected").checked) return;
+      const P = pt.points;
+      const sell = pt.direction === "sell";
+      const color = rejected ? css("--flat") : (sell ? css("--bear") : css("--bull"));
+      const hline = (price, from, to, c, style, width) => {
+        if (from >= to) return;
+        const s = chart.addLineSeries({ color: c, lineWidth: width || 1, lineStyle: style || 0,
+          priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+        s.setData([{ time: from, value: price }, { time: to, value: price }]);
+        legSeries.push(s);
+      };
+      const end = pt.completed_time || (P["3"] || P["2"]).time;
+      const fib = rejected ? css("--flat") : css("--fib");
+      hline(P.A.price, P.A.time, end, fib, 0);           // 0%
+      hline(P.B.price, P.A.time, end, fib, 0);           // 100%
+      hline(pt.level_200, P.A.time, end, fib, 2, 2);     // 200%
+      if (!rejected) hline(pt.sl, P["1"].time, end, css("--sl"), 1);   // SL at 1
+
+      const hiPos = sell ? "aboveBar" : "belowBar", loPos = sell ? "belowBar" : "aboveBar";
+      [["A", hiPos], ["B", loPos], ["1", hiPos], ["2", loPos], ["3", hiPos]].forEach(([k, pos]) => {
+        if (!P[k]) return;
+        markers.push({ time: P[k].time, position: pos, shape: "circle", size: 0, color, text: k });
+      });
+      const fails = Object.entries(pt.checks).filter(([, c]) => !c.ok).map(([, c]) => c.note);
+      markers.push({
+        time: P["2"].time, position: loPos, shape: sell ? "arrowDown" : "arrowUp", color,
+        text: `1-2-3 ${pt.direction} · ${statusText[pt.status]} · ${Math.round(pt.extension * 100)}%`
+              + (P["3"] && P["3"].ideal ? " · 3 ideal" : "") + (fails.length ? " · " + fails[0] : ""),
+      });
+    });
+  }
 
   // Trendlines: from the trend's start through the swing it rests on,
   // extended until the next trend starts. "TL" = a close across the line.
