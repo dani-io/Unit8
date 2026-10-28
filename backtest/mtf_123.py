@@ -1,18 +1,21 @@
 """
 Multi-timeframe 1-2-3 — Daniel's entry, walk-forward.
 
-    HTF (M15) confirms:  a 1-2-3 is valid up to point 2 (200%, 50% of the
+    HTF (e.g. M15) confirms:  a 1-2-3 is valid up to point 2 (200%, 50% of the
                          trend, trendline) and price is pulling back toward 3,
                          still below HTF 1 (sell; mirror for buy).
-    LTF (M1) enters:     that pullback is an uptrend on M1. A complete M1
-                         1-2-3 in the HTF direction (same rules) forms inside
-                         it; a stop order at M1 point 2 opens the trade.
+    LTF (e.g. M1) enters: that pullback is an uptrend on the LTF. A complete
+                         LTF 1-2-3 in the HTF direction forms inside it — same
+                         rules EXCEPT "50% of the previous trend", which is an
+                         HTF-only rule (Daniel). A stop order at LTF point 2
+                         opens the trade.
     SL / TP (fixed):     from the M1 pattern — SL = M1 1 ± 20% of M1 AB,
                          TP = M1 2 ∓ k·|M1 2 − M1 3|.  No trailing, no
                          break-even, no partial close (to be decided later).
 
-One trade per HTF setup. Each M15 bar is evaluated when it closes; M1 runs
-bar by bar while an HTF setup is armed. Every step only sees bars that
+Any timeframe pair works (M15→M1, H1→M5, H4→M15, ...); the HTF bar length
+is taken from the data. One trade per HTF setup. Each HTF bar is evaluated
+when it closes; the LTF runs bar by bar while an HTF setup is armed. Every step only sees bars that
 already closed. Prices are bid; buys pay the spread on entry, sells on exit;
 SL is assumed first when SL and TP share an M1 bar.
 
@@ -32,8 +35,9 @@ from tools.pattern_123 import detect_123
 from tools.trendline import build_trendlines
 from tools.zigzag import ZigZag
 
-HTF_MINUTES = 15
-CORE = ("trendline", "extension_200", "max_trend_retrace")
+HTF_CORE = ("trendline", "extension_200", "max_trend_retrace")
+LTF_CORE = ("trendline", "extension_200")          # 50%-of-trend is HTF-only
+LTF_OVERRIDES = {"max_trend_retrace": float("inf")}  # ...so it can't reject an LTF pattern
 
 
 def _patterns(df: pd.DataFrame, zz: ZigZag, point: float, config: dict = None):
@@ -49,7 +53,7 @@ def htf_setups(htf: pd.DataFrame, zz: ZigZag, point: float, config: dict = None)
     for p in _patterns(htf, zz, point, config):
         if p["status"] not in ("waiting_3", "ready"):
             continue
-        if not all(p["checks"][k]["ok"] for k in CORE):
+        if not all(p["checks"][k]["ok"] for k in HTF_CORE):
             continue
         sell = p["direction"] == "sell"
         p1, p2 = p["1"]["price"], p["2"]["price"]
@@ -69,9 +73,16 @@ def htf_setups(htf: pd.DataFrame, zz: ZigZag, point: float, config: dict = None)
 
 def run(htf: pd.DataFrame, ltf: pd.DataFrame, point: float, spread: float,
         htf_window: int = 512, ltf_window: int = 512, ltf_context: int = 120,
-        tp_multiples=(1.0, 2.0), config: dict = None) -> dict:
+        tp_multiples=(1.0, 2.0), config: dict = None, keep_alive: int = 0) -> dict:
+    """
+    keep_alive: 0 = an HTF setup is only armed while price is between HTF 2
+    and HTF 1 (strict reading). N > 0 = once armed, it stays armed for up to
+    N HTF bars even after price goes beyond HTF 2, until a close beyond HTF 1
+    (the LTF 1-2-3 often completes on the move through HTF 2).
+    """
     zz = ZigZag({"point": point})
     lt = ltf["time"].to_numpy()
+    htf_bar = pd.Series(htf["time"]).diff().dropna().mode().iloc[0]   # e.g. 15 min
     lh, ll, lo = (ltf[c].to_numpy() for c in ("high", "low", "open"))
 
     traded = set()
@@ -82,19 +93,31 @@ def run(htf: pd.DataFrame, ltf: pd.DataFrame, point: float, spread: float,
     start_h = max(htf_window, int(np.searchsorted(htf["time"].to_numpy(), np.datetime64(first_ltf))) + 1)
 
     armed: Dict[tuple, dict] = {}       # M1 stop orders, carried across HTF bars
+    alive: Dict[tuple, dict] = {}       # keep_alive: key -> setup + bars left
+    hc = htf["close"].to_numpy()
     for h in range(start_h, len(htf)):
         sub = htf.iloc[h - htf_window + 1: h + 1].reset_index(drop=True)
         setups = [s for s in htf_setups(sub, zz, point, config) if s["key"] not in traded]
         for s in setups:
             setups_seen.setdefault(s["key"], s)
+        if keep_alive:
+            for s in setups:
+                alive[s["key"]] = {**s, "left": keep_alive}
+            for key, s in list(alive.items()):
+                sell = s["direction"] == "sell"
+                beyond_1 = hc[h] > s["htf_1"] if sell else hc[h] < s["htf_1"]
+                s["left"] -= 1
+                if key in traded or beyond_1 or s["left"] < 0:
+                    alive.pop(key)
+            setups = list(alive.values())
         keys = {s["key"] for s in setups}
         armed = {k: v for k, v in armed.items() if k in keys}   # HTF setup gone → cancel
         if not setups:
             continue
 
         # M1 bars that close during the NEXT HTF bar (after HTF bar h closed)
-        t_from = htf["time"].iloc[h] + pd.Timedelta(minutes=HTF_MINUTES)
-        t_to = t_from + pd.Timedelta(minutes=HTF_MINUTES)
+        t_from = htf["time"].iloc[h] + htf_bar
+        t_to = (htf["time"].iloc[h + 1] + htf_bar) if h + 1 < len(htf) else t_from + htf_bar
         m_from = int(np.searchsorted(lt, np.datetime64(t_from)))
         m_to = int(np.searchsorted(lt, np.datetime64(t_to)))
 
@@ -117,13 +140,13 @@ def run(htf: pd.DataFrame, ltf: pd.DataFrame, point: float, spread: float,
                 break
             oldest = min(s["htf_2_time"] for s in live)
             m0 = max(0, min(m - ltf_window + 1, int(np.searchsorted(lt, np.datetime64(oldest))) - ltf_context))
-            m0 = max(m0, m - 3000)
+            m0 = max(m0, m - 3000)    # cap the LTF lookback (speed)
             lsub = ltf.iloc[m0: m + 1].reset_index(drop=True)
             close_now = lsub["close"].iloc[-1]
-            for lp in _patterns(lsub, zz, point, config):
+            for lp in _patterns(lsub, zz, point, {**(config or {}), **LTF_OVERRIDES}):
                 if lp["status"] not in ("waiting_3", "ready") or lp["3"] is None or not lp["3"]["inside"]:
                     continue
-                if not all(lp["checks"][k]["ok"] for k in CORE):
+                if not all(lp["checks"][k]["ok"] for k in LTF_CORE):
                     continue
                 for s in live:
                     if lp["direction"] != s["direction"] or s["key"] in armed:
@@ -135,7 +158,10 @@ def run(htf: pd.DataFrame, ltf: pd.DataFrame, point: float, spread: float,
                         continue
                     if (lp["1"]["price"] >= s["htf_1"]) if sell else (lp["1"]["price"] <= s["htf_1"]):
                         continue
-                    if not (s["htf_2"] < close_now < s["htf_1"] if sell else s["htf_1"] < close_now < s["htf_2"]):
+                    if keep_alive:
+                        if (close_now >= s["htf_1"]) if sell else (close_now <= s["htf_1"]):
+                            continue
+                    elif not (s["htf_2"] < close_now < s["htf_1"] if sell else s["htf_1"] < close_now < s["htf_2"]):
                         continue
                     armed[s["key"]] = {
                         "direction": s["direction"], "two": lp["2"]["price"], "three": lp["3"]["price"],
@@ -207,12 +233,13 @@ def main():
     ap.add_argument("ltf_csv")
     ap.add_argument("--point", type=float, default=0.00001)
     ap.add_argument("--spread", type=float)
+    ap.add_argument("--keep-alive", type=int, default=0)
     ap.add_argument("--out")
     a = ap.parse_args()
     htf = pd.read_csv(a.htf_csv, parse_dates=["time"])
     ltf = pd.read_csv(a.ltf_csv, parse_dates=["time"])
     spread = a.spread if a.spread is not None else 15 * a.point
-    r = run(htf, ltf, a.point, spread)
+    r = run(htf, ltf, a.point, spread, keep_alive=a.keep_alive)
     print(json.dumps({"htf_setups": r["htf_setups"], **r["summary"]}, indent=2))
     if a.out:
         json.dump(r, open(a.out, "w"), indent=2, default=str)
